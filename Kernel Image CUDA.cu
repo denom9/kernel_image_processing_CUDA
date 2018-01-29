@@ -124,6 +124,7 @@ __global__ void kernelConvolution(float* img, float** output ,const int imageWid
 
 			if((tileCol == 0)&&(col > 0)) //lato sinistro
 				imgTile[tileRow+1][tileCol]=img[((row) * imageWidth + (col-1)) * imageChannels + c];
+
 			if((tileCol == TILE_WIDTH - 1)&&(col < imageWidth)) //lato destro
 				imgTile[tileRow+1][tileCol+2]=img[((row) * imageWidth + (col+1)) * imageChannels + c];
 
