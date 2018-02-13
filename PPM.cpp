@@ -209,7 +209,7 @@ bool PPM_export(const char *filename, Image_t* img) {
 	} else {
 		fprintf(file, "P6\n");
 	}
-	fprintf(file, "#Created via PPM Export\n");
+	//fprintf(file, "#Created via PPM Export\n");
 	fprintf(file, "%d %d\n", width, height);
 	fprintf(file, "%d\n", depth);
 
