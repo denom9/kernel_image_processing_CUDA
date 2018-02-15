@@ -10,7 +10,7 @@
 
 #define TILE_WIDTH 16
 #define MAX_KERNEL 7
-
+#define MAX_CHANNELS 3
 
 #include <iostream>
 #include <numeric>
@@ -30,23 +30,23 @@ static void CheckCudaErrorAux (const char *, unsigned, const char *, cudaError_t
 
 __constant__ float deviceKernel[7*7];
 
-
+__device__ void compute(float* imgTile, float* sum){
+	int tileRow = threadIdx.y;
+	int tileCol = threadIdx.x;
+	float* addr = sum + (tileRow*TILE_WIDTH + tileCol);
+	*addr = atomicExch(addr,0);
+}
 
 __global__ void kernelConvolution(float* img, float* output ,const int imageWidth, const int imageHeight, const int imageChannels, const int KERNEL_SIZE){
 
-	const int INPUT_TILE_WIDTH = TILE_WIDTH + MAX_KERNEL - 1;
-	__shared__ float imgTile[INPUT_TILE_WIDTH][INPUT_TILE_WIDTH]; //condivisa a livello di blocco
+	__shared__ float imgTile[(TILE_WIDTH+MAX_KERNEL-1) * (TILE_WIDTH+MAX_KERNEL-1)];
 
-	//printf("%i-%i\n",blockDim.x,blockDim.y);
 	int col = threadIdx.x + blockDim.x * blockIdx.x;
 	int row = threadIdx.y + blockDim.y * blockIdx.y;
 
 	int border = KERNEL_SIZE / 2;
 
-	int kIndex;
-	float sum = 0;
-
-	//in quale INPUT_TILE sono (e quindi anche in quale TILE)
+	//in quale INPUT_TILE sono (e quindi anche in quale OUTPUT_TILE)
 	int h = blockIdx.x;
 	int w = blockIdx.y;
 
@@ -62,22 +62,19 @@ __global__ void kernelConvolution(float* img, float* output ,const int imageWidt
 	int imgRow = ((w * TILE_WIDTH + wOff) < imageHeight)? w * TILE_WIDTH + wOff : imageHeight - 1;
 	int imgCol = ((h * TILE_WIDTH + hOff) < imageWidth)? h * TILE_WIDTH + hOff : imageWidth - 1;
 
-
 	for(int c = 0; c < imageChannels; c++){
-		imgTile[tileRow][tileCol] = img[(imgRow * imageWidth + imgCol)*imageChannels + c];
-
+		imgTile[tileRow* blockDim.x + tileCol] = img[(imgRow * imageWidth + imgCol) * imageChannels + c];
 
 		__syncthreads();
 
-
 		if((tileRow >= border)&&(tileRow < TILE_WIDTH + border)&&(tileCol >= border)&&(tileCol < TILE_WIDTH + border)&&((w * TILE_WIDTH + wOff)<imageHeight)&&((h * TILE_WIDTH + hOff)<imageWidth)){
+			float sum = 0;
 			for(int i = 0; i < KERNEL_SIZE; i++){
-				for(int j = 0; j < KERNEL_SIZE; j++){
-					kIndex = (KERNEL_SIZE-1 - i) * KERNEL_SIZE + (KERNEL_SIZE-1 -j);
-					sum += imgTile[tileRow + i - border][tileCol + j - border] * deviceKernel[kIndex];
-				}
+				for(int j = 0; j < KERNEL_SIZE; j++)
+					sum += imgTile[(tileRow+i-border)* blockDim.x + (tileCol+j-border)] * deviceKernel[(KERNEL_SIZE-1-i) * KERNEL_SIZE + (KERNEL_SIZE-1-j)];
+					//sum += img[((imgRow + i - border)*imageWidth + (imgCol + j - border))*imageChannels + c] * deviceKernel[(KERNEL_SIZE-1-i) * KERNEL_SIZE + (KERNEL_SIZE-1-j)];
 			}
-			output[(imgRow * imageWidth + imgCol) * imageChannels + c] = sum;//imgTile[tileRow-1][tileCol-1];
+			output[(imgRow * imageWidth + imgCol) * imageChannels + c] = sum;
 			sum = 0;
 		}
 
@@ -91,8 +88,8 @@ __global__ void kernelConvolution(float* img, float* output ,const int imageWidt
 int main(int argc,  char** argv){
 
     Image_t* inputImage = PPM_import(argv[1]);
-
-    const int KERNEL_SIZE = (*argv[2] != '3' && *argv[2] != '5' && *argv[2] != '7')? 3 : (int)*argv[2] - '0';
+    char* outputPath = argv[2];
+    const int KERNEL_SIZE = (*argv[3] != '3' && *argv[3] != '5' && *argv[3] != '7')? 3 : (int)*argv[3] - '0';
     const int imageWidth = Image_getWidth(inputImage);
     const int imageHeight = Image_getHeight(inputImage);
     const int imageChannels = Image_getChannels(inputImage);
@@ -104,10 +101,7 @@ int main(int argc,  char** argv){
     float *hostOutput = Image_getData(outputImage);
     float *deviceInput;
     float *deviceOutput;
-
-    float* hostKernel = (*argv[2] == '5')? kernel5 : (*argv[2] == '7')? kernel7 : kernel3;
-
-
+    float* hostKernel = (*argv[3] == '5')? kernel5 : (*argv[3] == '7')? kernel7 : kernel3;
 
     //alloco la memoria (global) per contenere i dati dell'immagine e ci copio i dati
     CUDA_CHECK_RETURN(cudaMalloc((void**)&deviceInput,imageDataSize));
@@ -139,7 +133,7 @@ int main(int argc,  char** argv){
 
 	Image_setData(outputImage,hostOutput);
 
-    PPM_export("/home/samuele/Documenti/Università/Parallel Computing/Progetto finale/Kernel image/outputs/output_CUDA.ppm",outputImage);
+    PPM_export(strcat(outputPath,"/output_CUDA.ppm"),outputImage);
 
     //libero la memoria
     CUDA_CHECK_RETURN(cudaFree(deviceInput));
