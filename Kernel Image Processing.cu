@@ -8,8 +8,7 @@
  ============================================================================
  */
 
-#define TILE_WIDTH 16
-#define MAX_KERNEL 7
+#define TILE_WIDTH 32
 #define MAX_CHANNELS 3
 
 #include <iostream>
@@ -26,20 +25,11 @@
 static void CheckCudaErrorAux (const char *, unsigned, const char *, cudaError_t);
 #define CUDA_CHECK_RETURN(value) CheckCudaErrorAux(__FILE__,__LINE__, #value, value)
 
-
-
 __constant__ float deviceKernel[7*7];
-
-__device__ void compute(float* imgTile, float* sum){
-	int tileRow = threadIdx.y;
-	int tileCol = threadIdx.x;
-	float* addr = sum + (tileRow*TILE_WIDTH + tileCol);
-	*addr = atomicExch(addr,0);
-}
 
 __global__ void kernelConvolution(float* img, float* output ,const int imageWidth, const int imageHeight, const int imageChannels, const int KERNEL_SIZE){
 
-	__shared__ float imgTile[(TILE_WIDTH+MAX_KERNEL-1) * (TILE_WIDTH+MAX_KERNEL-1)];
+	__shared__ float imgTile[TILE_WIDTH * TILE_WIDTH];
 
 	int col = threadIdx.x + blockDim.x * blockIdx.x;
 	int row = threadIdx.y + blockDim.y * blockIdx.y;
@@ -59,15 +49,18 @@ __global__ void kernelConvolution(float* img, float* output ,const int imageWidt
 	int wOff = 	(row <= border)? 0 : tileRow - border;
 	int hOff = 	(col <= border)? 0 : tileCol - border;
 
-	int imgRow = ((w * TILE_WIDTH + wOff) < imageHeight)? w * TILE_WIDTH + wOff : imageHeight - 1;
-	int imgCol = ((h * TILE_WIDTH + hOff) < imageWidth)? h * TILE_WIDTH + hOff : imageWidth - 1;
+	int imgRow = ((w * (TILE_WIDTH - KERNEL_SIZE + 1) + wOff) < imageHeight)? w * (TILE_WIDTH - KERNEL_SIZE + 1) + wOff : imageHeight - 1;
+	int imgCol = ((h * (TILE_WIDTH - KERNEL_SIZE + 1) + hOff) < imageWidth)? h * (TILE_WIDTH - KERNEL_SIZE + 1) + hOff : imageWidth - 1;
 
 	for(int c = 0; c < imageChannels; c++){
-		imgTile[tileRow* blockDim.x + tileCol] = img[(imgRow * imageWidth + imgCol) * imageChannels + c];
+		//if(((w * (TILE_WIDTH - KERNEL_SIZE + 1) + wOff)<imageHeight+border)&&((h * (TILE_WIDTH - KERNEL_SIZE + 1) + hOff)<imageWidth+border))
+			imgTile[tileRow* blockDim.x + tileCol] = img[(imgRow * imageWidth + imgCol) * imageChannels + c];
+		//else
+		//	imgTile[tileRow* blockDim.x + tileCol] = 0;
 
 		__syncthreads();
 
-		if((tileRow >= border)&&(tileRow < TILE_WIDTH + border)&&(tileCol >= border)&&(tileCol < TILE_WIDTH + border)&&((w * TILE_WIDTH + wOff)<imageHeight)&&((h * TILE_WIDTH + hOff)<imageWidth)){
+		if((tileRow >= border)&&(tileRow < TILE_WIDTH - border)&&(tileCol >= border)&&(tileCol < TILE_WIDTH - border)&&((w * (TILE_WIDTH - KERNEL_SIZE + 1) + wOff)<imageHeight)&&((h * (TILE_WIDTH - KERNEL_SIZE + 1) + hOff)<imageWidth)){
 			float sum = 0;
 			for(int i = 0; i < KERNEL_SIZE; i++){
 				for(int j = 0; j < KERNEL_SIZE; j++)
@@ -113,8 +106,8 @@ int main(int argc,  char** argv){
 	CUDA_CHECK_RETURN(cudaMemcpyToSymbol(deviceKernel, hostKernel,sizeof(float)*KERNEL_SIZE*KERNEL_SIZE)); //trasferisco i dati dei kernel in constant memory
 
 
-    dim3 gridDim(ceil((float)imageWidth / TILE_WIDTH),ceil((float)imageHeight / TILE_WIDTH));
-    dim3 blockDim(TILE_WIDTH + KERNEL_SIZE - 1,TILE_WIDTH + KERNEL_SIZE - 1);
+    dim3 gridDim(ceil((float)imageWidth / (TILE_WIDTH - KERNEL_SIZE + 1)),ceil((float)imageHeight / (TILE_WIDTH - KERNEL_SIZE + 1)));
+    dim3 blockDim(TILE_WIDTH,TILE_WIDTH);
     //printf("%i,%i\n%i,%i\n",gridDim.x,gridDim.y,blockDim.x,blockDim.y);
 
     auto start = std::chrono::system_clock::now();
